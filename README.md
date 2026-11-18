@@ -1,17 +1,22 @@
 # lob-engine
 
-A low-latency **limit order book and matching engine** in modern C++20, built as the
-foundation for a market-making research stack (market data replay → Avellaneda–Stoikov
-market making → Python analytics).
+A low-latency **limit order book and matching engine** in modern C++20. On top of it sits
+a market-making research stack: real Binance market data replayed and validated against
+the exchange, and a queue-aware backtester for Avellaneda–Stoikov market making.
+
+![Cumulative PnL of three market-making strategies on one hour of BTC/USDT](docs/img/pnl_by_strategy.png)
 
 - Price-time priority matching (limit, market/IOC, cancel, size reduction)
 - Zero heap allocation in steady state (pooled orders + free list)
 - **~51M mixed operations/s** on a single core, p99 latency **< 100 ns**
 - **Replays real Binance BTC/USDT data.** The reconstructed book matched the exchange's
-  own snapshots exactly, on 49,846 of 49,846 price levels checked.
+  own snapshots on every check: 17 of 17 checkpoints, 160,187 price levels.
+- **Market-making backtest on one hour of real data.** Avellaneda–Stoikov, a
+  join-the-touch baseline and an imbalance filter all lose about 2 bp per unit traded to
+  adverse selection, and the backtester shows exactly why ([findings](#phase-3-market-making-backtest)).
 - Verified against a naive reference implementation on 200k random operations
 - CI on Linux (GCC) and macOS (Clang), plus an AddressSanitizer/UBSan job. The CI also
-  replays a real market-data sample and fails if the book drifts.
+  replays real market data and fails if the book drifts.
 
 ## Results
 
@@ -83,6 +88,87 @@ cost about another 25%. At ~3 µs per 100 ms exchange event, replay runs about 3
 faster than real time, which is fast enough for multi-day backtests. These two costs are
 the next optimisation targets.
 
+## Phase 3: market-making backtest
+
+The strategy's own orders are simulated against the replayed market (`include/lob/sim/`).
+A market-making backtest is only as credible as its fill model, so the fill model is
+explicit and tested (`tests/test_sim.cpp`):
+
+| Assumption | Model |
+|---|---|
+| Latency | New orders and cancels take effect 20 ms after they are sent. An order can still fill while its cancel is in flight. |
+| Post-only | An order that would cross the market on arrival is rejected. |
+| Queue position | A new order joins **behind** the quantity already resting at its price. Liquidity added later queues behind it. |
+| Fills at our price | Real trades at our price consume the queue ahead of us first, then fill us. |
+| Fills through our price | If a sell prints *below* our bid, it would have hit us first, so we fill up to the trade size. |
+| Cancels by others | Assumed to come from behind us first (the same FIFO model as the L2 adapter), so the queue ahead only shrinks when the level drops below it. This is conservative. |
+| Not modelled | Market impact (our fills don't remove real liquidity). Orders are only re-evaluated on market events. |
+
+**Strategies.**
+- **Avellaneda–Stoikov (2008)** with a rolling horizon: reservation price
+  `r = s − q·γ·σ²·τ` and spread `γ·σ²·τ + (2/γ)·ln(1 + γ/k)`. σ² is estimated online
+  (time-weighted EWMA of mid variance). k is estimated online from the distance of trade
+  prints to the mid (exponential MLE). As an option, it can use the size-weighted
+  microprice instead of the mid.
+- **Join touch.** The baseline always quotes the best bid and the best ask.
+- **Touch + imbalance filter.** It steps away from the side whose queue is about to be
+  depleted (queue imbalance < 0.25).
+
+All strategies quote 0.001 BTC, cap inventory at ±0.01 BTC, and keep an unchanged quote in
+place so it keeps its queue priority.
+
+### Results: 1 hour of BTC/USDT, 133,512 trades, 0 bp fees
+
+| Strategy | Fills | Volume | Spread capture | Inventory PnL | **Net PnL** | Markout 1 s | Markout 30 s | Break-even maker fee |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Join touch (baseline) | 12,967 | 1.87 BTC | +$0.01 | −$22.81 | **−$22.81** | −$6.49/BTC | −$9.70/BTC | −1.95 bp |
+| Touch + imbalance filter | 1,441 | 0.24 BTC | +$0.02 | −$3.62 | **−$3.60** | −$10.27/BTC | −$15.26/BTC | −2.43 bp |
+| Avellaneda–Stoikov γ=1e-4 | 5,642 | 1.16 BTC | +$2.15 | −$18.68 | **−$16.52** | −$6.31/BTC | −$8.81/BTC | −2.27 bp |
+| AS γ=1e-4 + microprice | 5,710 | 1.17 BTC | +$2.22 | −$18.80 | **−$16.59** | −$6.42/BTC | −$9.10/BTC | −2.26 bp |
+| AS γ=1e-3 | 4,848 | 0.95 BTC | +$2.05 | −$16.84 | **−$14.79** | −$6.36/BTC | −$10.99/BTC | −2.49 bp |
+
+*Spread capture* is the edge against the mid at the moment of each fill. *Inventory PnL*
+is the mid moving on the inventory we hold, which is where adverse selection shows up.
+*Break-even maker fee* is the fee at which net PnL would be zero: a negative value means
+the strategy needs a rebate that large just to break even. Run
+`./build/lob_mm_backtest <file.lob> --sweep` for the full grid, including latency
+sensitivity.
+
+![Markouts per strategy](docs/img/markouts.png)
+
+### What the data says
+
+1. **No variant makes money. Every one loses about 2 bp of notional to adverse
+   selection.** The inventory loss is about 9× the spread captured for
+   Avellaneda–Stoikov, and the touch strategies capture almost nothing at all. Real
+   maker fees at Binance's standard spot tiers are positive, which would only widen the
+   loss.
+2. **Fills arrive exactly when they hurt.** 82–99% of fills happen because the price
+   traded *through* our level. BTC/USDT is a large-tick market: the spread is pinned at
+   one tick ($0.01) and the touch holds several BTC, so a quote at the touch only fills
+   once the whole queue ahead is consumed. That is precisely the moment the mid jumps.
+   The average fill is followed by a ≈$6.5/BTC move against us within one second, while
+   the spread offers $0.005.
+3. **Avellaneda–Stoikov behaves as designed but cannot change the sign.** Its inventory
+   skew works (lower mean |inventory| as γ rises). Quoting deeper earns real edge at the
+   fill (+$1.9/BTC versus ≈$0 at the touch), but that edge is about 3× smaller than the
+   one-second markout.
+4. **The imbalance filter cuts losses 6× by trading about 8× less volume.** It does not find better
+   fills: the fills it keeps are *more* toxic per BTC (−$10.3 versus −$6.5 at 1 s).
+5. **Latency is not the bottleneck; information is.** Going from 100 ms to 1 ms of
+   order latency changes little and never flips the sign (see `--sweep`), because the strategy acts on a public depth feed that
+   updates every 100 ms. Any quote can be up to 100 ms stale and gets picked off. In this
+   market, profitability depends on data speed and queue priority, not on the quoting
+   formula. Testing that hypothesis with Binance's real-time `bookTicker` feed is the
+   next research step.
+
+![Anatomy of the Avellaneda–Stoikov run](docs/img/as_anatomy.png)
+
+**Limitations.** One hour is a single market regime (BTC drifted up about $500), so these
+results are not a statistically robust strategy evaluation. Our quotes have no market
+impact. During a cancel-replace, the old and new orders briefly coexist, which can push
+inventory one order past its limit (visible above).
+
 ## Design
 
 ```
@@ -142,6 +228,17 @@ python3 tools/binance/convert.py data/sample/btcusdt_sample.jsonl.gz build/sampl
 python3 -m unittest discover -s tools/binance             # sync-protocol tests
 ```
 
+**Market-making backtest** on the bundled one-hour recording:
+
+```bash
+python3 tools/binance/convert.py data/btcusdt_1h.jsonl.gz build/btcusdt_1h.lob
+./build/lob_mm_backtest build/btcusdt_1h.lob --sweep                 # comparison grid
+./build/lob_mm_backtest build/btcusdt_1h.lob --strategy as --gamma 1e-4 --microprice \
+    --fee-bps 0 --latency-ms 20 --out build/as                         # one run + CSVs
+python3 -m venv .venv && .venv/bin/pip install -r tools/analysis/requirements.txt
+.venv/bin/python tools/analysis/plot_backtest.py build/btcusdt_1h.lob --out docs/img
+```
+
 **Record your own data** (public market-data endpoints, no API key):
 
 ```bash
@@ -170,8 +267,9 @@ book.cancel(2);
 
 - [x] **Phase 1: matching engine.** Order book, tests, benchmarks, CI.
 - [x] **Phase 2: market data.** Record Binance L2 and trades, replay them deterministically, and validate the book against exchange snapshots.
-- [ ] **Phase 3: market making.** Avellaneda–Stoikov quoting with inventory risk, fees, queue position and adverse-selection analysis, backtested on recorded data.
-- [ ] **Phase 4: analytics.** `pybind11` bindings and a notebook covering PnL, Sharpe, drawdown and inventory.
+- [x] **Phase 3: market making.** Queue-aware simulated execution, Avellaneda–Stoikov with online σ and k estimation, baselines, PnL decomposition and markout analysis on one hour of real data.
+- [ ] **Phase 3b: information speed.** Record the real-time `bookTicker` feed and test whether faster data turns the adverse-selection loss around.
+- [ ] **Phase 4: analytics.** `pybind11` bindings and a notebook for interactive research (the static charts above come from `tools/analysis/plot_backtest.py`).
 - [ ] **Performance.** Faster deep-level inserts (a tick-indexed ladder or a hybrid of both structures), an allocation-free L2 adapter, an open-addressing id index, `rdtsc`/`cntvct` cycle timing, and huge pages plus core pinning on Linux.
 
 ## License

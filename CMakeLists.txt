@@ -49,7 +49,7 @@ if(LOB_BUILD_TESTS)
   FetchContent_MakeAvailable(googletest)
 
   add_executable(lob_tests tests/test_order_book.cpp tests/test_reference_model.cpp
-                         tests/test_replay.cpp)
+                         tests/test_replay.cpp tests/test_sim.cpp)
   target_link_libraries(lob_tests PRIVATE lob::lob lob_flags GTest::gtest_main)
   include(GoogleTest)
   gtest_discover_tests(lob_tests)
@@ -82,4 +82,7 @@ endif()
 if(LOB_BUILD_TOOLS)
   add_executable(lob_replay tools/replay.cpp)
   target_link_libraries(lob_replay PRIVATE lob::lob lob_flags)
+
+  add_executable(lob_mm_backtest tools/mm_backtest.cpp)
+  target_link_libraries(lob_mm_backtest PRIVATE lob::lob lob_flags)
 endif()

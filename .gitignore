@@ -10,3 +10,4 @@ __pycache__/
 data/*.jsonl.gz
 !data/sample/*.jsonl.gz
 *.csv
+!data/btcusdt_1h.jsonl.gz

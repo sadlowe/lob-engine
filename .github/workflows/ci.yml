@@ -37,6 +37,12 @@ jobs:
         run: |
           python3 tools/binance/convert.py data/sample/btcusdt_sample.jsonl.gz build/sample.lob
           ./build/lob_replay build/sample.lob
+      - name: Validate the 1-hour recording against 12 exchange snapshots
+        run: |
+          python3 tools/binance/convert.py data/btcusdt_1h.jsonl.gz build/btcusdt_1h.lob
+          ./build/lob_replay build/btcusdt_1h.lob --top 0
+      - name: Market-making backtest (1 hour, full grid)
+        run: ./build/lob_mm_backtest build/btcusdt_1h.lob --sweep
 
   sanitizers:
     name: ASan + UBSan
@@ -53,3 +59,4 @@ jobs:
         run: |
           python3 tools/binance/convert.py data/sample/btcusdt_sample.jsonl.gz build/sample.lob
           ./build/lob_replay build/sample.lob --top 0
+          ./build/lob_mm_backtest build/sample.lob --sweep
