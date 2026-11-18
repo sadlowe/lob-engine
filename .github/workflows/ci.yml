@@ -31,6 +31,12 @@ jobs:
         run: ./build/basic_usage
       - name: Latency smoke run
         run: ./build/lob_latency
+      - name: Converter tests (Binance sync protocol)
+        run: python3 -m unittest discover -s tools/binance -v
+      - name: Replay real BTCUSDT sample and validate against exchange snapshots
+        run: |
+          python3 tools/binance/convert.py data/sample/btcusdt_sample.jsonl.gz build/sample.lob
+          ./build/lob_replay build/sample.lob
 
   sanitizers:
     name: ASan + UBSan
@@ -43,3 +49,7 @@ jobs:
         run: cmake --build build -j
       - name: Test
         run: ctest --test-dir build --output-on-failure
+      - name: Replay sample under sanitizers
+        run: |
+          python3 tools/binance/convert.py data/sample/btcusdt_sample.jsonl.gz build/sample.lob
+          ./build/lob_replay build/sample.lob --top 0

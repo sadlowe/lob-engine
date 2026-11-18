@@ -13,6 +13,7 @@ endif()
 option(LOB_BUILD_TESTS "Build unit tests" ON)
 option(LOB_BUILD_BENCHMARKS "Build benchmarks" ON)
 option(LOB_BUILD_EXAMPLES "Build examples" ON)
+option(LOB_BUILD_TOOLS "Build market-data tools" ON)
 option(LOB_SANITIZE "Build with AddressSanitizer + UBSan" OFF)
 
 # ---- Library (header-only) -------------------------------------------------
@@ -47,7 +48,8 @@ if(LOB_BUILD_TESTS)
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
   FetchContent_MakeAvailable(googletest)
 
-  add_executable(lob_tests tests/test_order_book.cpp tests/test_reference_model.cpp)
+  add_executable(lob_tests tests/test_order_book.cpp tests/test_reference_model.cpp
+                         tests/test_replay.cpp)
   target_link_libraries(lob_tests PRIVATE lob::lob lob_flags GTest::gtest_main)
   include(GoogleTest)
   gtest_discover_tests(lob_tests)
@@ -74,4 +76,10 @@ endif()
 if(LOB_BUILD_EXAMPLES)
   add_executable(basic_usage examples/basic_usage.cpp)
   target_link_libraries(basic_usage PRIVATE lob::lob lob_flags)
+endif()
+
+# ---- Tools ------------------------------------------------------------------
+if(LOB_BUILD_TOOLS)
+  add_executable(lob_replay tools/replay.cpp)
+  target_link_libraries(lob_replay PRIVATE lob::lob lob_flags)
 endif()

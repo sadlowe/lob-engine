@@ -4,3 +4,9 @@ compile_commands.json
 .DS_Store
 .vscode/
 .idea/
+.venv/
+__pycache__/
+*.lob
+data/*.jsonl.gz
+!data/sample/*.jsonl.gz
+*.csv
