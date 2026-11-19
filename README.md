@@ -14,6 +14,10 @@ the exchange, and a queue-aware backtester for Avellaneda–Stoikov market makin
 - **Market-making backtest on one hour of real data.** Avellaneda–Stoikov, a
   join-the-touch baseline and an imbalance filter all lose about 2 bp per unit traded to
   adverse selection, and the backtester shows exactly why ([findings](#phase-3-market-making-backtest)).
+- **Research study on 381M real order-book updates.** Queue imbalance predicts the next
+  price move on 5 Binance perpetuals, out of sample and in 2 market regimes (AUC up to
+  0.76). It still cannot pay a taker: the edge is about 20 times smaller than the fees
+  and decays within milliseconds ([study](docs/research/README.md)).
 - Verified against a naive reference implementation on 200k random operations
 - CI on Linux (GCC) and macOS (Clang), plus an AddressSanitizer/UBSan job. The CI also
   replays real market data and fails if the book drifts.
@@ -169,6 +173,33 @@ results are not a statistically robust strategy evaluation. Our quotes have no m
 impact. During a cancel-replace, the old and new orders briefly coexist, which can push
 inventory one order past its limit (visible above).
 
+## Research: queue imbalance as a price predictor
+
+[Full study](docs/research/README.md). It applies the design of Gould & Bonart (2016) to
+Binance USD-M perpetuals: 5 contracts, 2 regimes (Sep 2023 and Mar 2024), 381M top-of-book
+updates and 2.5M samples, with out-of-sample tests and block-bootstrap intervals.
+
+- **The signal is real.** Out-of-sample AUC is 0.63 to 0.76, and the side with the bigger
+  queue wins the next move 59.5 to 68.8% of the time. A model fitted on a quiet day keeps
+  its calibration in a crash week.
+- **It predicts the move it is about to cause.** When the next move comes within 100 ms,
+  the AUC reaches 0.92 on BTC; when it is more than 5 s away, the AUC falls to about 0.55.
+  This explains most of the differences between contracts.
+- **A taker cannot trade it.** On BTC and ETH, crossing the spread 50 ms after the signal
+  earns +0.47 bp gross per round trip [95% CI 0.43 to 0.51], against 10 bp of fees. The
+  break-even fee is 0.23 bp per side. On XRP and DOGE, one tick (1.6 to 2.1 bp) already
+  costs more than the predicted move. A placebo test (the imbalance from one hour
+  earlier) gives an edge of about 0.
+- **Its value is defensive.** A bid resting in the thin queue sees the price fall next 67
+  to 76% of the time. This is the adverse selection measured in Phase 3.
+
+![Predictive power vs wait, and edge vs latency](docs/research/decay.png)
+
+The pipeline is `tools/research/fetch_bookticker.py` (download and checksum check), then
+the C++ extractor `tools/bbo_extract.cpp` (about 2M rows/s, exact integer prices), then
+`tools/research/queue_imbalance.py` (statistics and charts). It is tested against an
+independent implementation in CI.
+
 ## Design
 
 ```
@@ -269,6 +300,7 @@ book.cancel(2);
 - [x] **Phase 2: market data.** Record Binance L2 and trades, replay them deterministically, and validate the book against exchange snapshots.
 - [x] **Phase 3: market making.** Queue-aware simulated execution, Avellaneda–Stoikov with online σ and k estimation, baselines, PnL decomposition and markout analysis on one hour of real data.
 - [ ] **Phase 3b: information speed.** Record the real-time `bookTicker` feed and test whether faster data turns the adverse-selection loss around.
+- [x] **Research: queue imbalance.** A predictive study on 6 days of Binance top-of-book data for 5 contracts. The signal is real; for a taker it is not tradable after fees.
 - [ ] **Phase 4: analytics.** `pybind11` bindings and a notebook for interactive research (the static charts above come from `tools/analysis/plot_backtest.py`).
 - [ ] **Performance.** Faster deep-level inserts (a tick-indexed ladder or a hybrid of both structures), an allocation-free L2 adapter, an open-addressing id index, `rdtsc`/`cntvct` cycle timing, and huge pages plus core pinning on Linux.
 

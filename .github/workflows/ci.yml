@@ -43,6 +43,10 @@ jobs:
           ./build/lob_replay build/btcusdt_1h.lob --top 0
       - name: Market-making backtest (1 hour, full grid)
         run: ./build/lob_mm_backtest build/btcusdt_1h.lob --sweep
+      - name: Research pipeline tests (bookTicker extractor + statistics)
+        run: |
+          python3 -m venv .venv && .venv/bin/pip install -q -r tools/research/requirements.txt
+          .venv/bin/python -m unittest tools/research/test_queue_imbalance.py -v
 
   sanitizers:
     name: ASan + UBSan
@@ -60,3 +64,7 @@ jobs:
           python3 tools/binance/convert.py data/sample/btcusdt_sample.jsonl.gz build/sample.lob
           ./build/lob_replay build/sample.lob --top 0
           ./build/lob_mm_backtest build/sample.lob --sweep
+      - name: bookTicker extractor under sanitizers
+        run: |
+          python3 -m venv .venv && .venv/bin/pip install -q numpy==2.5.5
+          .venv/bin/python -m unittest tools/research/test_queue_imbalance.py -v

@@ -85,4 +85,7 @@ if(LOB_BUILD_TOOLS)
 
   add_executable(lob_mm_backtest tools/mm_backtest.cpp)
   target_link_libraries(lob_mm_backtest PRIVATE lob::lob lob_flags)
+
+  add_executable(lob_bbo_extract tools/bbo_extract.cpp)
+  target_link_libraries(lob_bbo_extract PRIVATE lob_flags)
 endif()
